@@ -80,7 +80,7 @@ async function validateUser(username, password) {
   return { id: user.id, username: user.username };
 }
 
-//add refresh rotation
+//todo add refresh rotation later
 function generateToken(user) {
   return jwt.sign(
     { sub: user.id, name: user.username },
