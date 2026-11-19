@@ -80,11 +80,12 @@ async function validateUser(username, password) {
   return { id: user.id, username: user.username };
 }
 
+//add refresh rotation
 function generateToken(user) {
   return jwt.sign(
     { sub: user.id, name: user.username },
     tokenSecret,
-    { algorithm: 'HS256', expiresIn: '15m' }
+    { algorithm: 'HS256', expiresIn: '30d' }
   );
 }
 
@@ -108,7 +109,7 @@ app.post('/login', async (req, res) => {
     }
 
     const token = generateToken(validUser);
-    return res.status(200).json({ token });
+    return res.status(200).json({ access_token: token  });
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({ error: 'Internal server error' });
