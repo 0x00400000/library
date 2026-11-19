@@ -3,13 +3,13 @@ require('dotenv').config();
 const express = require('express');
 const { DatabaseSync } = require('node:sqlite');
 const crypto = require('node:crypto');
+const jwt = require('jsonwebtoken');
 
 const port = process.env.PORT
 const tokenSecret = process.env.tokenSecret
 
 const app = express()
 const db = new DatabaseSync('app.db');
-
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -30,9 +30,9 @@ VALUES ('', '', '', '');
 `)
 */
 
-function stringToArgon(passwordString) {
+function hashPassword(passwordString, existingSaltBuffer = null) {
   return new Promise((resolve, reject) => {
-    const salt = crypto.randomBytes(16);
+    const salt = existingSaltBuffer || crypto.randomBytes(16);
 
     crypto.argon2('argon2id', {
       message: passwordString,
@@ -44,6 +44,7 @@ function stringToArgon(passwordString) {
     }, (err, derivedKey) => {
       if (err) return reject(err);
       resolve({
+        hashBuffer: derivedKey,
         hash: derivedKey.toString('hex'),
         salt: salt.toString('hex')
       });
@@ -51,24 +52,40 @@ function stringToArgon(passwordString) {
   });
 }
 
+const findUserStmt = db.prepare(`
+  SELECT id, username, password_hash, password_salt, is_active
+  FROM users
+  WHERE username = ?
+`);
 
-function validateUser(username, password) {
+async function validateUser(username, password) {
+  const user = findUserStmt.get(username);
 
+  if (!user || !user.is_active) {
+    return null;
+  }
+
+  const storedSaltBuffer = Buffer.from(user.password_salt, 'hex');
+  const storedHashBuffer = Buffer.from(user.password_hash, 'hex');
+  
+  const { hashBuffer } = await hashPassword(password, storedSaltBuffer);
+
+  if (
+    hashBuffer.length !== storedHashBuffer.length ||
+    !crypto.timingSafeEqual(hashBuffer, storedHashBuffer)
+  ) {
+    return null;
+  }
+
+  return { id: user.id, username: user.username };
 }
 
-function generateToken(data) {
-  /*
-  {
-    sub: "1234567890",
-    name: "John Doe", 
-    admin: false, 
-    "iat": 1516239022, 
-    "exp": 1716666000 
-  }
-    */
-  jwt.sign({
-    data: data
-  }, tokenSecret, { expiresIn: '1h' });
+function generateToken(user) {
+  return jwt.sign(
+    { sub: user.id, name: user.username },
+    tokenSecret,
+    { algorithm: 'HS256', expiresIn: '15m' }
+  );
 }
 
 app.use(express.json())
@@ -77,24 +94,27 @@ app.get('/', (req, res) => {
   res.send('Hello World!')
 })
 
-app.post('/login', (req, res) => {
-  const requestBody = req.body;
-  const {username, password} = requestBody || {}
-  if (!username || !password) {
-    return res.statusCode(400).json({error: 'Please specify username and password'});
-  }
-  return res.status(200).json()
-})
 
-app.post('/refresh', (req, res) => {
-  const requestBody = req.body;
-  const {username, password} = requestBody || {}
-  if (!username || !password) {
-    return res.statusCode(400).json({error: 'Please specify username and password'});
+app.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Please specify username and password' });
+    }
+
+    const validUser = await validateUser(username, password);
+    if (!validUser) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+
+    const token = generateToken(validUser);
+    return res.status(200).json({ token });
+  } catch (err) {
+    console.error('Login error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
-  return res.status(200).json()
-})
+});
 
 app.listen(port, () => {
-  console.log(`Library server is listening on ${port}`)
-})
+  console.log(`Library server is listening on ${port}`);
+});
